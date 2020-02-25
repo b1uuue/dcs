@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dcs test</title>
+    <style>
+        html {
+            height: 100%;
+        }
+
+        body {
+            height: 100%;
+            margin: 0;
+        }
+
+        div {
+            margin: 0;
+        }
+
+        video {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div>
+        <video autoplay></video>
+        <canvas id="videoCvs"></canvas>
+        <canvas id="dCvs"></canvas>
+    </div>
+    <div class="video-options">
+        <select>
+            <option value="">Select camera</option>
+        </select>
+        <button onclick="playVideo()">Play</button>
+        <button onclick="pauseStream()">Pause</button>
+        <button onclick="doScreenshot()">Screen shot</button>
+        <button onclick="autoDetect()">Auto detect</button>
+    </div>
+    <input type="file" id="dFile" accept="image/*"><br>
+
+
+    <button onclick="getWasmVersion()">GetWasmVersion</button>
+    <button onclick="detectDocument()">DetectDocument</button>
+    <button onclick="autoProcess()">AutoProcess</button>
+    <button onclick="getProcessResultImage()">GetProcessResultImage</button>
+    <button onclick="freeProcessResultImage()">FreeProcessResultImage</button>
+
+
+    <script src="../dist/dynamsoft.documentPolygon_wasm.js"></script>
+    <script>
+        const cvs = document.getElementById('dCvs'),
+            ctx = cvs.getContext('2d');
+        const videoCvs = document.getElementById('videoCvs'),
+            videoCtx = videoCvs.getContext('2d');
+        const video = document.querySelector('video');
+        const cameraOptions = document.querySelector('.video-options>select');
+        let streamStarted = false;
+        let intervalDetect, intervalVideo;
+
+        cameraOptions.onchange = () => {
+            const updatedConstraints = {
+                // ...constraints,
+                audio: false,
+                // facingMode: 'environment',
+                video: {
+                    deviceId: {
+                        exact: cameraOptions.value
+                    }
+                }
+            };
+            startStream(updatedConstraints);
+        };
+
+        // start video
+        const startStream = async constraints => {
+            if (video.srcObject) {
+                // video.srcObject = stream;
+                video.srcObject.getTracks().forEach(track => {
+                    track.stop();
+                });
+                //  don't have srcObject
+            }
+            if (navigator.mediaDevices === undefined) {
+                navigator.mediaDevices = {};
+            }
+            // use getUserMedia
+            if (navigator.mediaDevices.getUserMedia === undefined) {
+                navigator.mediaDevices.getUserMedia = function (constraints) {
+                    var getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+                    if (!getUserMedia) {
+                        return Promise.reject(new Error('getUserMedia is not implemented in this browser'));
+                    }
+                    //else
+                    return new Promise(function (resolve, reject) {
+                        getUserMedia.call(navigator, constraints, resolve, reject);
+                    });
+                }
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints)
+            // .catch(function (err) {
+            //     console.log(err.name + ": " + err.message);
+            // });;
+            currentStream = stream;
+            if ('srcObject' in video) {
+                video.srcObject = stream;
+            } else {
+                video.src = window.URL.createObjectURL(stream);
+            }
+            // video.onloadedmetadata = function (e) {
+            //     video.play();
+            // };
+        };
+
+        const playVideo = () => {
+            if (streamStarted) {
+                video.play();
+                // return;
+            }
+            if ('mediaDevices' in navigator && navigator.mediaDevices.getUserMedia) {
+                const updatedConstraints = {
+                    // ...constraints,
+                    audio: false,
+                    // facingMode: 'environment',
+                    video: {
+                        deviceId: {
+                            exact: cameraOptions.value
+                        }
+                    }
+                };
+                startStream(updatedConstraints);
+                intervalVideo = setInterval(() => {
+                    videoCvs.width = video.videoWidth;
+                    videoCvs.height = video.videoHeight;
+                    videoCtx.drawImage(video, 0, 0);
+                }, 1);
+            }
+        };
+
+        const pauseStream = () => {
+            video.pause;
+            clearInterval(intervalDetect);
+            clearInterval(intervalVideo);
+        };
+
+        const doScreenshot = () => {
+            cvs.width = video.videoWidth;
+            cvs.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+        };
+
+        // add selections
+        const getCameraSelection = async () => {
+            let devices = await navigator.mediaDevices.enumerateDevices();
+            let videoDevices = devices.filter(device => device.kind === 'videoinput');
+            let options = videoDevices.map(videoDevice => {
+                return `<option value="${videoDevice.deviceId}">${videoDevice.label}</option>`;
+            });
+            cameraOptions.innerHTML = options.join('');
+        };
+        getCameraSelection();
+
+
+        let dFile = document.getElementById('dFile');
+        let _fileBuffer, _newWidth, _newHeight, detectResult, autoResult, position;
+
+        dFile.addEventListener('change', function (ev) {
+            let reader = new FileReader();
+            reader.readAsArrayBuffer(this.files[0]);
+            reader.onload = function () {
+                _file = reader.result;
+                let _blob = new Blob([reader.result]);
+                let _img = new Image();
+                _img.src = URL.createObjectURL(_blob);
+                _img.onload = function () {
+                    _newWidth = cvs.width = _img.width;
+                    _newHeight = cvs.height = _img.height;
+                    // ctx.globalAlpha = 1;
+                    ctx.drawImage(_img, 0, 0, _img.width, _img.height);
+                    _fileBuffer = ctx.getImageData(0, 0, _img.width, _img.height).data;
+                    // console.log(_fileBuffer)
+                }
+            }
+
+        });
+
+        function getWasmVersion() {
+            console.log(docPolygon.GetWasmVersion());
+        }
+
+        function detectDocument() {
+            let scale = 1, _time = Date.now();
+            detectResult = docPolygon.DetectDocument(_fileBuffer, _newWidth, _newHeight, scale);
+            console.log(Date.now() - _time);
+            console.log(detectResult, detectResult.aryPos.size());
+            for (let i = 0; i < detectResult.aryPos.size(); i++) {
+                let pos = position = detectResult.aryPos.get(i);
+                console.log("x1:" + pos.x1 + " y1:" + pos.y1 + " x2:" + pos.x2 + " y2:" + pos.y2)
+                console.log(" x3:" + pos.x3 + " y3:" + pos.y3 + " x4:" + pos.x4 + " y4:" + pos.y4 + "\n")
+            }
+            ctx.moveTo(position.x1, position.y1);
+            ctx.lineTo(position.x2, position.y2);
+            ctx.lineTo(position.x3, position.y3);
+            ctx.lineTo(position.x4, position.y4);
+            ctx.lineTo(position.x1, position.y1);
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = "#ff9318";
+            ctx.stroke();
+        }
+
+        function autoDetect() {
+            intervalDetect = setInterval(() => {
+                _fileBuffer = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight).data;
+                let scale = 1, _time = Date.now();
+                detectResult = docPolygon.DetectDocument(_fileBuffer, video.videoWidth, video.videoWidth, scale);
+                console.log(Date.now() - _time);
+                console.log(detectResult, detectResult.aryPos.size());
+                for (let i = 0; i < detectResult.aryPos.size(); i++) {
+                    let pos = position = detectResult.aryPos.get(i);
+                    console.log("x1:" + pos.x1 + " y1:" + pos.y1 + " x2:" + pos.x2 + " y2:" + pos.y2)
+                    console.log(" x3:" + pos.x3 + " y3:" + pos.y3 + " x4:" + pos.x4 + " y4:" + pos.y4 + "\n")
+                }
+                videoCtx.moveTo(position.x1, position.y1);
+                videoCtx.lineTo(position.x2, position.y2);
+                videoCtx.lineTo(position.x3, position.y3);
+                videoCtx.lineTo(position.x4, position.y4);
+                videoCtx.lineTo(position.x1, position.y1);
+                videoCtx.lineWidth = 5;
+                videoCtx.strokeStyle = "#ff9318";
+                videoCtx.stroke();
+            }, 200);
+        }
+
+        function autoProcess() {
+            autoResult = docPolygon.AutoProcess(_fileBuffer, _newWidth, _newHeight, position);
+            cvs.width = autoResult.width;
+            cvs.height = autoResult.height;
+            console.log(autoResult)
+        }
+
+        function getProcessResultImage() {
+            let _buffer = docPolygon.GetProcessResultImage();
+            console.log(_buffer);
+            let arr = new Uint8ClampedArray(_buffer);
+            let imgData = new ImageData(arr, autoResult.width, autoResult.height);
+            console.log(imgData)
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        function freeProcessResultImage() {
+            docPolygon.FreeProcessResultImage()
+        }
+
+
+        let docPolygon, _moduleAsync;
+        const license = "t0068MgAAAF3ESsp27Cz0FqtB76ZO+rymKxiDrYj5Tm8bxr0Zf/L1qrbBOkKrpZkPBz7hmQqaohJ9FcqfnXpkY2cBrAoDbbk=";
+        let moduleReady = function (key) {
+            return new Promise(function (resolve, reject) {
+                let _module = documentPolygonModule();
+                // module function get ready
+                _module.onRuntimeInitialized = function () {
+                    docPolygon = new _module.DocumentPolygon(key);
+                    console.log('Document Polygon Module Ready!');
+                    resolve();
+                }
+            });
+        };
+
+        moduleReady(license).then(function () {
+
+        });
+    </script>
+
+</body>
+
+</html>
